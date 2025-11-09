@@ -27,13 +27,13 @@ class MpScraper(_PluginBase):
     # 插件图标
     plugin_icon = "scraper.png"
     # 插件版本
-    plugin_version = "2.1.2"  # 版本号更新
+    plugin_version = "2.1.0"  # 版本号更新
     # 插件作者
     plugin_author = "GriMu"
     # 作者主页
     author_url = "https://github.com/GriMu"
     # 插件配置项ID前缀
-    plugin_config_prefix = "libraryscraper_"
+    plugin_config_prefix = "mpscraper_"
     # 加载顺序
     plugin_order = 7
     # 可使用的用户级别

@@ -27,7 +27,7 @@ class MpScraper(_PluginBase):
     # 插件图标
     plugin_icon = "scraper.png"
     # 插件版本
-    plugin_version = "2.1.0"  # 版本号更新
+    plugin_version = "2.1.1"  # 版本号更新
     # 插件作者
     plugin_author = "GriMu"
     # 作者主页
@@ -74,11 +74,11 @@ class MpScraper(_PluginBase):
         if self._enabled or self._onlyonce:
 
             if self._onlyonce:
-                logger.info(f"媒体库刮削服务，立即运行一次")
+                logger.info(f"MP媒体库刮削服务，立即运行一次")
                 self._scheduler = BackgroundScheduler(timezone=settings.TZ)
                 self._scheduler.add_job(func=self.__libraryscraper, trigger='date',
                                         run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
-                                        name="媒体库刮削")
+                                        name="MP媒体库刮削")
                 # 关闭一次性开关
                 self._onlyonce = False
                 # 【修改】更新配置时包含新项
@@ -119,16 +119,16 @@ class MpScraper(_PluginBase):
         """
         if self._enabled and self._cron:
             return [{
-                "id": "LibraryScraper",
-                "name": "媒体库刮削",
+                "id": "MpScraper",
+                "name": "MP媒体库刮削",
                 "trigger": CronTrigger.from_crontab(self._cron),
                 "func": self.__libraryscraper,
                 "kwargs": {}
             }]
         elif self._enabled:
             return [{
-                "id": "LibraryScraper",
-                "name": "媒体库刮削",
+                "id": "MpScraper",
+                "name": "MP媒体库刮削",
                 "trigger": CronTrigger.from_crontab("0 0 */7 * *"),
                 "func": self.__libraryscraper,
                 "kwargs": {}
@@ -354,14 +354,14 @@ class MpScraper(_PluginBase):
             # 判断路径是否存在
             scraper_path = Path(path)
             if not scraper_path.exists():
-                logger.warning(f"媒体库刮削路径不存在：{path}")
+                logger.warning(f"MP媒体库刮削路径不存在：{path}")
                 continue
             logger.info(f"开始检索目录：{path} {mtype} ...")
             # 遍历所有文件
             files = SystemUtils.list_files(scraper_path, settings.RMT_MEDIAEXT)
             for file_path in files:
                 if self._event.is_set():
-                    logger.info(f"媒体库刮削服务停止")
+                    logger.info(f"MP媒体库刮削服务停止")
                     return
 
                 # 【新增】根据时间阈值筛选文件

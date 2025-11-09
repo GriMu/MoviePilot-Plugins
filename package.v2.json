@@ -570,11 +570,12 @@
     "name": "MP媒体库刮削",
     "description": "指定时间，定时对媒体库进行刮削，补齐缺失元数据和图片。",
     "labels": "刮削",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "icon": "scraper.png",
     "author": "GriMu",
     "level": 1,
     "history": {
+			"v2.1.1": "BUG修改",
       "v2.1.0": "指定时间，定时对媒体库进行刮削，补齐缺失元数据和图片。"
     }
   }

@@ -1049,5 +1049,17 @@
     "author": "cddjr",
     "level": 1,
     "v2": true
-  }
+  },
+	"MpScraper": {
+	  "name": "MP媒体库刮削",
+	  "description": "指定时间，定时对媒体库进行刮削，补齐缺失元数据和图片。",
+	  "labels": "刮削",
+	  "version": "1.0",
+	  "icon": "scraper.png",
+	  "author": "GriMu",
+	  "level": 1,
+	  "history": {
+	    "v1.0": "指定时间，定时对媒体库进行刮削，补齐缺失元数据和图片。"
+	  }
+	}
 }

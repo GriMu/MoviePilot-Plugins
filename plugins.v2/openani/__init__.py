@@ -1,8 +1,8 @@
 import os
 import time
+import json
 from datetime import datetime, timedelta
 from urllib.parse import quote
-import random
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -19,8 +19,7 @@ from app.utils.dom import DomUtils
 
 def retry(ExceptionToCheck: Any,
           tries: int = 3, delay: int = 3, backoff: int = 1, logger: Any = None, ret: Any = None):
-    """重试装饰器，支持自定义请求头"""
-
+    """重试装饰器"""
     def deco_retry(f):
         def f_retry(*args, **kwargs):
             mtries, mdelay = tries, delay
@@ -39,30 +38,20 @@ def retry(ExceptionToCheck: Any,
             if logger:
                 logger.warn('请确保当前季度番剧文件夹存在或检查网络问题')
             return ret
-
         return f_retry
-
     return deco_retry
 
 
 class OpenANi(_PluginBase):
-    # 插件名称
+    # 插件基本信息
     plugin_name = "OpenANi"
-    # 插件描述
-    plugin_desc = "自动获取当季所有番剧，支持自定义请求头绕过Cloudflare防护"
-    # 插件图标
+    plugin_desc = "自动获取当季所有番剧，支持目录遍历和文件直链生成"
     plugin_icon = "https://raw.githubusercontent.com/honue/MoviePilot-Plugins/main/icons/anistrm.png"
-    # 插件版本
     plugin_version = "2.5.0"
-    # 插件作者
     plugin_author = "GriMu"
-    # 作者主页
     author_url = "https://github.com/GriMu"
-    # 插件配置项ID前缀
     plugin_config_prefix = "openani_"
-    # 加载顺序
     plugin_order = 15
-    # 可使用的用户级别
     auth_level = 2
 
     # 私有属性
@@ -71,22 +60,36 @@ class OpenANi(_PluginBase):
     _onlyonce = False
     _fulladd = False
     _storageplace = None
-    
-    # 自定义配置属性
     _custom_season = None
     _custom_rss_url = None
     _custom_season_url = None
-    _custom_headers = None  # 新增：自定义请求头
+    _custom_headers = None
+    _current_base_url = None  # 当前使用的镜像基础URL
     
-    # 默认镜像列表（用于轮询）
-    DEFAULT_MIRRORS = [
-        'https://openani.an-i.workers.dev',
-        'https://pili.cc.cd',
-        'https://ani.v300.eu.org',
-        'https://ani.op5.de5.net',
-    ]
-    
-    # 定时器
+    # 必要的请求头模板（基于您的成功请求）
+    def _get_necessary_headers(self) -> dict:
+        """获取必要的请求头，自动适配当前镜像"""
+        base_url = self._current_base_url or 'https://openani.an-i.workers.dev'
+        season = self.__get_ani_season()
+        
+        return {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0',
+            'Accept': '*/*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+            'Cache-Control': 'no-cache',
+            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'Origin': base_url,
+            'Pragma': 'no-cache',
+            'Priority': 'u=1, i',
+            'Sec-Ch-Ua': '"Microsoft Edge";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
+            'Sec-Ch-Ua-Mobile': '?0',
+            'Sec-Ch-Ua-Platform': '"macOS"',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+            'X-Requested-With': 'XMLHttpRequest',
+        }
+
     _scheduler: Optional[BackgroundScheduler] = None
 
     def init_plugin(self, config: dict = None):
@@ -101,7 +104,7 @@ class OpenANi(_PluginBase):
             self._custom_season = config.get("custom_season")
             self._custom_rss_url = config.get("custom_rss_url")
             self._custom_season_url = config.get("custom_season_url")
-            self._custom_headers = config.get("custom_headers")  # 加载自定义请求头
+            self._custom_headers = config.get("custom_headers")
             
         if self._enabled or self._onlyonce:
             self._scheduler = BackgroundScheduler(timezone=settings.TZ)
@@ -142,109 +145,149 @@ class OpenANi(_PluginBase):
                 return f'{current_year}-{month}'
         return f'{current_year}-1'
 
-    def __get_headers(self) -> dict:
-        """获取请求头，优先使用自定义请求头"""
-        # 如果用户配置了自定义请求头，优先使用
-        if self._custom_headers:
-            try:
-                # 解析用户输入的请求头（格式：Key: Value，每行一个）
-                headers = {}
-                for line in self._custom_headers.strip().split('\n'):
-                    if ':' in line:
-                        key, value = line.split(':', 1)
-                        headers[key.strip()] = value.strip()
-                if headers:
-                    logger.info("使用自定义请求头")
-                    return headers
-            except Exception as e:
-                logger.warning(f"解析自定义请求头失败: {e}")
+    def __make_api_request(self, url: str, headers: dict = None, post_data: str = '{"password":"null"}') -> Optional[Dict]:
+        """
+        统一的API请求方法
+        返回解析后的JSON字典，失败返回None
+        """
+        if not headers:
+            headers = self._get_necessary_headers()
         
-        # 默认浏览器请求头（模拟真实浏览器）
-        default_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-        }
+        # 更新Referer为当前请求的URL
+        headers['Referer'] = url
         
-        # 随机化部分请求头，增加真实性
-        default_headers['User-Agent'] = random.choice([
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
-        ])
-        
-        return default_headers
+        try:
+            response = RequestUtils(
+                headers=headers,
+                proxies=settings.PROXY if settings.PROXY else None,
+                timeout=30
+            ).post(url=url, data=post_data)
+            
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    return data
+                except ValueError as json_err:
+                    logger.error(f'JSON解析失败: {json_err}')
+                    logger.debug(f'响应内容前200字符: {response.text[:200]}')
+                    return None
+            elif response.status_code == 403:
+                logger.error(f'禁止访问 (403)，可能需要有效密码')
+                return None
+            elif response.status_code == 500:
+                logger.error(f'服务器错误 (500)')
+                return None
+            else:
+                logger.warning(f'返回状态码: {response.status_code}')
+                return None
+                
+        except Exception as e:
+            logger.error(f'API请求失败: {e}')
+            return None
 
-    @retry(Exception, tries=5, delay=5, logger=logger, ret=[])
-    def get_current_season_list(self) -> List:
-        """获取当前季度番剧列表，支持多镜像轮询"""
+    @retry(Exception, tries=3, logger=logger, ret=[])
+    def get_current_season_list(self) -> List[Dict]:
+        """
+        获取当前季度番剧列表
+        兼容处理文件列表和目录列表两种返回格式
+        返回格式: [{"name": "文件名/目录名", "id": "ID", "is_folder": False}, ...]
+        """
         season = self.__get_ani_season()
         
-        # 构建镜像列表
+        # 镜像列表
+        mirrors = [
+            'https://openani.an-i.workers.dev',
+            'https://pili.cc.cd',
+            'https://ani.v300.eu.org',
+            'https://ani.op5.de5.net',
+        ]
+        
         if self._custom_season_url:
-            mirrors = [self._custom_season_url]
-        else:
-            mirrors = self.DEFAULT_MIRRORS.copy()
-            random.shuffle(mirrors)  # 随机化顺序
+            mirrors.insert(0, self._custom_season_url)
         
-        headers = self.__get_headers()
-        
-        # 尝试每个镜像
         for mirror in mirrors:
-            try:
-                url = f'{mirror.rstrip("/")}/{season}/'
-                logger.info(f'尝试镜像: {url}')
+            self._current_base_url = mirror.rstrip("/")
+            url = f'{self._current_base_url}/{season}/'
+            logger.info(f'尝试镜像: {url}')
+            
+            data = self.__make_api_request(url)
+            
+            if data and 'files' in data:
+                result = []
+                for item in data['files']:
+                    item_info = {
+                        'name': item.get('name', ''),
+                        'id': item.get('id', ''),
+                        'is_folder': item.get('mimeType') == 'application/vnd.google-apps.folder',
+                        'created_time': item.get('createdTime', '')
+                    }
+                    result.append(item_info)
                 
-                # 使用自定义请求头
-                rep = RequestUtils(
-                    headers=headers,
-                    ua=settings.USER_AGENT if settings.USER_AGENT else None,
-                    proxies=settings.PROXY if settings.PROXY else None
-                ).post(url=url)
-                
-                # 检查响应状态
-                if rep.status_code == 200:
-                    try:
-                        data = rep.json()
-                        if 'files' in data:
-                            files_json = data['files']
-                            logger.info(f'成功获取 {len(files_json)} 个文件，镜像: {mirror}')
-                            return [file['name'] for file in files_json]
-                    except Exception as e:
-                        logger.warning(f'JSON解析失败: {e}')
-                elif rep.status_code == 404:
-                    logger.warning(f'镜像 {mirror} 不存在季度 {season}')
-                    continue
-                else:
-                    logger.warning(f'镜像 {mirror} 返回状态码: {rep.status_code}')
-                    
-            except Exception as e:
-                logger.warning(f'镜像 {mirror} 请求失败: {e}')
-                continue
+                logger.info(f'✅ 成功获取 {len(result)} 个项目（文件/目录），镜像: {mirror}')
+                return result
         
-        # 所有镜像都失败
-        logger.error(f'所有镜像均无法获取季度 {season} 的文件列表')
+        logger.error(f'❌ 所有镜像均无法获取季度 {season} 的数据')
         return []
+
+    @retry(Exception, tries=3, logger=logger, ret=[])
+    def get_files_from_folder(self, folder_name: str, season: str = None) -> List[Dict]:
+        """
+        从指定目录名获取文件列表
+        使用URL结构：域名/季度/目录名/
+        返回格式: [{"name": "文件名", "id": "ID", "download_url": "下载链接"}, ...]
+        """
+        if not season:
+            season = self.__get_ani_season()
+        
+        base_url = self._current_base_url or 'https://openani.an-i.workers.dev'
+        
+        # URL编码目录名
+        encoded_folder_name = quote(folder_name, safe='')
+        url = f'{base_url}/{season}/{encoded_folder_name}/'
+        
+        logger.info(f'获取目录内容: {folder_name} (URL: {url})')
+        
+        data = self.__make_api_request(url)
+        
+        if data and 'files' in data:
+            files = []
+            for item in data['files']:
+                # 只处理媒体文件，忽略子目录
+                if item.get('mimeType', '').startswith('video/'):
+                    file_info = {
+                        'name': item.get('name', ''),
+                        'id': item.get('id', ''),
+                        'download_url': self._build_download_url(item.get('id', '')),
+                        'size': item.get('size', 0),
+                        'created_time': item.get('createdTime', '')
+                    }
+                    files.append(file_info)
+            
+            logger.info(f'从目录 {folder_name} 获取到 {len(files)} 个媒体文件')
+            return files
+        
+        return []
+
+    def _build_download_url(self, file_id: str) -> str:
+        """构建文件下载URL"""
+        base_url = self._current_base_url or 'https://openani.an-i.workers.dev'
+        
+        # 根据API响应构建下载链接
+        # 可能的格式：
+        # 1. https://域名/file/文件ID?d=true
+        # 2. https://域名/季度/目录名/文件名.mp4?d=true
+        
+        # 暂时使用第一种格式，如果失败再尝试其他格式
+        return f'{base_url}/file/{file_id}?d=true'
 
     @retry(Exception, tries=3, logger=logger, ret=[])
     def get_latest_list(self) -> List:
         """获取最新更新列表（RSS）"""
         addr = self._custom_rss_url if self._custom_rss_url else 'https://api.ani.rip/ani-download.xml'
-        headers = self.__get_headers()
         
         try:
             ret = RequestUtils(
-                headers=headers,
-                ua=settings.USER_AGENT if settings.USER_AGENT else None,
+                headers=self._get_necessary_headers(),
                 proxies=settings.PROXY if settings.PROXY else None
             ).get_res(addr)
             
@@ -265,7 +308,7 @@ class OpenANi(_PluginBase):
                 title = DomUtils.tag_value(item, "title", default="")
                 link = DomUtils.tag_value(item, "link", default="")
                 
-                # 如果用户自定义了域名，进行替换适配
+                # 域名替换适配
                 if self._custom_season_url and link:
                     if "resources.ani.rip" in link:
                         link = link.replace("resources.ani.rip", "openani.an-i.workers.dev")
@@ -280,46 +323,35 @@ class OpenANi(_PluginBase):
             logger.error(f'获取RSS列表失败: {e}')
             return []
 
-    def __touch_strm_file(self, file_name, file_url: str = None) -> bool:
-        """创建strm文件"""
-        if not file_url:
-            # 季度API生成的URL
-            base_url = self._custom_season_url if self._custom_season_url else 'https://openani.an-i.workers.dev'
-            encoded_filename = quote(file_name, safe='')
-            src_url = f'{base_url.rstrip("/")}/{self._date}/{encoded_filename}.mp4?d=true'
+    def __touch_strm_file(self, file_name: str, download_url: str, parent_folder: str = "") -> bool:
+        """
+        创建strm文件
+        参数:
+            file_name: 文件名
+            download_url: 下载链接
+            parent_folder: 父目录名（用于创建子文件夹）
+        """
+        # 构建文件路径
+        if parent_folder:
+            # 创建番剧子目录
+            show_dir = os.path.join(self._storageplace, parent_folder)
+            os.makedirs(show_dir, exist_ok=True)
+            file_path = os.path.join(show_dir, f'{file_name}.strm')
         else:
-            # RSS获取的URL，确保格式正确
-            if self._is_url_format_valid(file_url):
-                src_url = file_url
-            else:
-                src_url = self._convert_url_format(file_url)
+            file_path = f'{self._storageplace}/{file_name}.strm'
         
-        file_path = f'{self._storageplace}/{file_name}.strm'
         if os.path.exists(file_path):
             logger.debug(f'{file_name}.strm 文件已存在')
             return False
             
         try:
-            with open(file_path, 'w') as file:
-                file.write(src_url)
+            with open(file_path, 'w', encoding='utf-8') as file:
+                file.write(download_url)
                 logger.debug(f'创建 {file_name}.strm 文件成功')
                 return True
         except Exception as e:
             logger.error(f'创建strm源文件失败: {e}')
             return False
-
-    def _is_url_format_valid(self, url: str) -> bool:
-        """检查URL格式是否符合要求"""
-        return url.endswith('.mp4?d=true')
-
-    def _convert_url_format(self, url: str) -> str:
-        """将URL转换为符合要求的格式"""
-        if '?d=mp4' in url:
-            return url.replace('?d=mp4', '.mp4?d=true')
-        elif url.endswith('.mp4'):
-            return f'{url}?d=true'
-        else:
-            return f'{url}.mp4?d=true'
 
     def __task(self, fulladd: bool = False):
         """核心任务执行"""
@@ -330,17 +362,34 @@ class OpenANi(_PluginBase):
             rss_info_list = self.get_latest_list()
             logger.info(f'本次处理 {len(rss_info_list)} 个RSS文件')
             for rss_info in rss_info_list:
-                if self.__touch_strm_file(file_name=rss_info['title'], file_url=rss_info['link']):
+                if self.__touch_strm_file(file_name=rss_info['title'], download_url=rss_info['link']):
                     cnt += 1
         else:
-            # 全量添加
-            name_list = self.get_current_season_list()
-            logger.info(f'本次处理 {len(name_list)} 个季度文件')
-            for file_name in name_list:
-                if self.__touch_strm_file(file_name=file_name):
-                    cnt += 1
-                    
-        logger.info(f'新创建了 {cnt} 个strm文件')
+            # 全量添加当季
+            season_items = self.get_current_season_list()
+            logger.info(f'本次处理 {len(season_items)} 个季度项目')
+            
+            for item in season_items:
+                if item['is_folder']:
+                    # 处理目录：获取目录内文件
+                    folder_files = self.get_files_from_folder(item['name'], self.__get_ani_season())
+                    for file_info in folder_files:
+                        if self.__touch_strm_file(
+                            file_name=file_info['name'],
+                            download_url=file_info['download_url'],
+                            parent_folder=item['name']
+                        ):
+                            cnt += 1
+                else:
+                    # 处理文件：直接生成strm
+                    download_url = self._build_download_url(item['id'])
+                    if self.__touch_strm_file(
+                        file_name=item['name'],
+                        download_url=download_url
+                    ):
+                        cnt += 1
+                        
+        logger.info(f'✅ 新创建了 {cnt} 个strm文件')
 
     def get_state(self) -> bool:
         return self._enabled
@@ -358,7 +407,7 @@ class OpenANi(_PluginBase):
             {
                 'component': 'VForm',
                 'content': [
-                    # 基础配置行
+                    # 基础配置
                     {
                         'component': 'VRow',
                         'content': [
@@ -373,7 +422,7 @@ class OpenANi(_PluginBase):
                             ]}
                         ]
                     },
-                    # 路径和周期配置行
+                    # 高级配置
                     {
                         'component': 'VRow',
                         'content': [
@@ -384,23 +433,23 @@ class OpenANi(_PluginBase):
                                 {'component': 'VTextField', 'props': {'model': 'storageplace', 'label': 'Strm存储地址', 'placeholder': '/downloads/strm'}}
                             ]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 4}, 'content': [
-                                {'component': 'VTextField', 'props': {'model': 'custom_season', 'label': '自定义季度 (可选)', 'placeholder': '如: 2024-1'}}
+                                {'component': 'VTextField', 'props': {'model': 'custom_season', 'label': '自定义季度', 'placeholder': '2024-1'}}
                             ]}
                         ]
                     },
-                    # 自定义链接配置行
+                    # 镜像和RSS配置
                     {
                         'component': 'VRow',
                         'content': [
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                {'component': 'VTextField', 'props': {'model': 'custom_rss_url', 'label': '自定义RSS订阅源 (可选)', 'placeholder': '留空使用默认ani.rip RSS源'}}
+                                {'component': 'VTextField', 'props': {'model': 'custom_rss_url', 'label': '自定义RSS订阅源', 'placeholder': '留空使用默认'}}
                             ]},
                             {'component': 'VCol', 'props': {'cols': 12, 'md': 6}, 'content': [
-                                {'component': 'VTextField', 'props': {'model': 'custom_season_url', 'label': '自定义季度API基础链接 (可选)', 'placeholder': '留空使用默认openani Workers链接'}}
+                                {'component': 'VTextField', 'props': {'model': 'custom_season_url', 'label': '自定义季度API基础链接', 'placeholder': '留空使用默认'}}
                             ]}
                         ]
                     },
-                    # 新增：自定义请求头配置
+                    # 自定义请求头
                     {
                         'component': 'VRow',
                         'content': [
@@ -409,10 +458,10 @@ class OpenANi(_PluginBase):
                                     'component': 'VTextarea',
                                     'props': {
                                         'model': 'custom_headers',
-                                        'label': '自定义请求头 (可选，高级用户)',
+                                        'label': '自定义请求头',
                                         'placeholder': '每行一个，格式: Key: Value\n例如:\nUser-Agent: Mozilla/5.0\nReferer: https://openani.an-i.workers.dev/',
                                         'rows': 6,
-                                        'hint': '留空使用内置的浏览器模拟请求头。此功能用于绕过Cloudflare等防护。'
+                                        'hint': '留空使用内置的浏览器模拟请求头'
                                     }
                                 }
                             ]}
@@ -426,13 +475,14 @@ class OpenANi(_PluginBase):
                                 {
                                     'component': 'VAlert',
                                     'props': {
-                                        'type': 'info',
+                                        'type': 'success',
                                         'variant': 'tonal',
-                                        'text': '✨ **新功能**：支持自定义请求头，有效绕过Cloudflare 1101错误\n'
-                                                '🔧 **改进**：内置多镜像轮询机制，自动尝试可用镜像站\n'
-                                                '⚡ **优化**：随机化User-Agent，模拟真实浏览器访问\n\n'
-                                                '自动从API抓取下载直链生成strm文件，免去人工订阅下载\n'
-                                                '配合目录监控使用，strm文件创建在存储地址，mp会完成刮削',
+                                        'text': '✨ **v3.1.0 新功能**：\n'
+                                                '• 支持目录遍历，自动获取番剧文件列表\n'
+                                                '• 智能识别文件/目录类型，自动适配处理\n'
+                                                '• 为每部番剧创建独立子目录\n'
+                                                '• 增强错误处理和日志记录\n\n'
+                                                '自动从API抓取下载直链生成strm文件，配合目录监控使用',
                                         'style': 'white-space: pre-line;'
                                     }
                                 },
@@ -441,9 +491,11 @@ class OpenANi(_PluginBase):
                                     'props': {
                                         'type': 'warning',
                                         'variant': 'tonal',
-                                        'text': '⚠️ **注意**：如果所有镜像都失败，请检查网络和代理设置\n'
-                                                '💡 **建议**：优先配置自定义请求头，通常可解决1101错误\n'
-                                                '🔄 **镜像**：内置多个镜像站，会自动轮询尝试',
+                                        'text': '⚠️ **注意事项**：\n'
+                                                '• 确保MoviePilot容器已配置代理\n'
+                                                '• 全量添加会遍历目录，请求次数较多\n'
+                                                '• 如遇1101错误，请检查代理和请求头配置\n'
+                                                '• 建议使用增量更新（RSS）模式更稳定',
                                         'style': 'white-space: pre-line;'
                                     }
                                 }
@@ -461,7 +513,7 @@ class OpenANi(_PluginBase):
             "custom_season": "",
             "custom_rss_url": "",
             "custom_season_url": "",
-            "custom_headers": ""  # 新增默认值
+            "custom_headers": ""
         }
 
     def __update_config(self):
@@ -474,7 +526,7 @@ class OpenANi(_PluginBase):
             "custom_season": self._custom_season,
             "custom_rss_url": self._custom_rss_url,
             "custom_season_url": self._custom_season_url,
-            "custom_headers": self._custom_headers  # 持久化自定义请求头
+            "custom_headers": self._custom_headers
         })
 
     def get_page(self) -> List[dict]:
@@ -490,25 +542,3 @@ class OpenANi(_PluginBase):
                 self._scheduler = None
         except Exception as e:
             logger.error(f"退出插件失败: {e}")
-
-
-if __name__ == "__main__":
-    # 测试代码
-    plugin = OpenANi()
-    
-    # 模拟配置
-    test_config = {
-        "enabled": True,
-        "custom_headers": "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36\nReferer: https://openani.an-i.workers.dev/"
-    }
-    
-    plugin.init_plugin(test_config)
-    
-    # 测试获取列表
-    print("测试获取季度列表...")
-    season_list = plugin.get_current_season_list()
-    print(f"获取到 {len(season_list)} 个文件")
-    
-    print("\n测试获取RSS列表...")
-    rss_list = plugin.get_latest_list()
-    print(f"获取到 {len(rss_list)} 个RSS条目")

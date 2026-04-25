@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import re
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlparse
 import pytz
@@ -167,21 +168,9 @@ class OpenANi(_PluginBase):
 
         # 情况1: 来自RSS的链接，包含 ?d=mp4 或特定域名
         if '?d=mp4' in original_url or 'resources.ani.rip' in original_url or 'pro.pili.cc.cd' in original_url:
-            parsed_url = urlparse(original_url)
-            path = parsed_url.path
-            
-            path_parts = [part for part in path.split('/') if part]
-            if len(path_parts) > 0:
-                extracted_season = path_parts[0]
-                try:
-                    year, month = map(int, extracted_season.split('-'))
-                    if month in [1, 4, 7, 10]:
-                        season = extracted_season
-                except:
-                    pass
-            
-            file_path = '/'.join(path_parts[1:]) if len(path_parts) > 1 else ''
-            new_url = f"{base_url}/{season}/{file_path}"
+			# 正则替换模式：保留协议，替换直到/resources.ani.rip之前的所有内容
+			pattern = r'(https?://)[^/]+(?:/resources\.ani\.rip)?'
+			new_url = re.sub(pattern, f'\\1{base_url}', original_url)
             
             if '?d=mp4' in new_url:
                 new_url = new_url.replace('?d=mp4', '.mp4?d=true')

@@ -43,7 +43,7 @@ class OpenANi(_PluginBase):
     plugin_name = "OpenANi"
     plugin_desc = "自动获取当季所有番剧，支持目录遍历和文件直链生成"
     plugin_icon = "https://raw.githubusercontent.com/honue/MoviePilot-Plugins/main/icons/anistrm.png"
-    plugin_version = "2.5.1"
+    plugin_version = "2.5.2"
     plugin_author = "GriMu"
     author_url = "https://github.com/GriMu"
     plugin_config_prefix = "openani_"

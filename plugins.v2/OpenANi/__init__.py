@@ -51,7 +51,7 @@ def retry(ExceptionToCheck: Any,
     return deco_retry
 
 
-class ANiStrm(_PluginBase):
+class OpenANi(_PluginBase):
     # 插件名称
     plugin_name = "OpenANi"
     # 插件描述
@@ -113,7 +113,7 @@ class ANiStrm(_PluginBase):
                 try:
                     self._scheduler.add_job(func=self.__task,
                                             trigger=CronTrigger.from_crontab(self._cron),
-                                            name="ANiStrm文件创建")
+                                            name="OpenANi文件创建")
                     logger.info(f'ANi-Strm定时任务创建成功：{self._cron}')
                 except Exception as err:
                     logger.error(f"定时任务配置错误：{str(err)}")
@@ -122,7 +122,7 @@ class ANiStrm(_PluginBase):
                 logger.info(f"ANi-Strm服务启动，立即运行一次")
                 self._scheduler.add_job(func=self.__task, args=[self._fulladd], trigger='date',
                                         run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
-                                        name="ANiStrm文件创建")
+                                        name="OpenANi文件创建")
                 # 关闭一次性开关 全量转移
                 self._onlyonce = False
                 self._fulladd = False
@@ -473,6 +473,6 @@ class ANiStrm(_PluginBase):
 
 
 if __name__ == "__main__":
-    anistrm = ANiStrm()
+    anistrm = OpenANi()
     name_list = anistrm.get_latest_list()
     print(name_list)

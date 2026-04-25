@@ -578,5 +578,17 @@
 			"v2.1.1": "BUG修改",
       "v2.1.0": "指定时间，定时对媒体库进行刮削，补齐缺失元数据和图片。"
     }
+  },
+  "OpenANi": {
+    "name": "OpenANi",
+    "description": "自动获取当季所有番剧，免去下载，轻松拥有一个番剧媒体库，增加自定义季度、RSS订阅源、季度链接。",
+    "labels": "刮削",
+    "version": "2.4.3",
+    "icon": "https://raw.githubusercontent.com/honue/MoviePilot-Plugins/main/icons/anistrm.png",
+    "author": "GriMu",
+    "level": 1,
+    "history": {
+      "v2.4.3": "增加自定义季度、RSS订阅源、季度链接。"
+    }
   }
 }

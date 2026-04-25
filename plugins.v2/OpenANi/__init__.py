@@ -59,7 +59,7 @@ class OpenANi(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/honue/MoviePilot-Plugins/main/icons/anistrm.png"
     # 插件版本
-    plugin_version = "2.4.3"  # 版本号升级
+    plugin_version = "2.4.3"  # 版本号升级2.4.3
     # 插件作者
     plugin_author = "GriMu"
     # 作者主页

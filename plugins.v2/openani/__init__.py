@@ -169,8 +169,10 @@ class OpenANi(_PluginBase):
         # 情况1: 来自RSS的链接，包含 ?d=mp4 或特定域名
         if '?d=mp4' in original_url or 'resources.ani.rip' in original_url or 'pro.pili.cc.cd' in original_url:
             # 提取新域名（去掉协议部分）
-            new_domain = base_url.split('://')[-1]
-            
+			if self._custom_season_url:
+                new_domain = self._custom_season_url.split('://')[-1].rstrip("/")
+            else:
+                new_domain = base_url.split('://')[-1]
             # 正则替换：匹配协议和域名，以及可选的 /resources.ani.rip
             pattern = r'(https?://)[^/]+(?:/resources\.ani\.rip)?'
             new_url = re.sub(pattern, f'\\1{new_domain}', original_url)

@@ -334,7 +334,7 @@ class OpenANi(_PluginBase):
 
     def _extract_season_from_url(self, url: str) -> str:
         """从URL中提取季度路径，如 2026-4"""
-        match = re.search(r'/(\d{4}-[1-9])/', url)
+        match = re.search(r'/(\d{4}-(?:1[0-2]|[1-9]))/', url)
         return match.group(1) if match else ""
 
     def __task(self, fulladd: bool = False):

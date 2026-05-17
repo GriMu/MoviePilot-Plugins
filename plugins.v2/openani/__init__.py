@@ -314,21 +314,28 @@ class OpenANi(_PluginBase):
             show_dir = os.path.join(self._storageplace, parent_folder)
             os.makedirs(show_dir, exist_ok=True)
             file_path = os.path.join(show_dir, f'{file_name}.strm')
+            log_prefix = f'[{parent_folder}] '
         else:
             file_path = f'{self._storageplace}/{file_name}.strm'
+            log_prefix = ''
 
         if os.path.exists(file_path):
-            logger.debug(f'{file_name}.strm 文件已存在')
+            logger.debug(f'{log_prefix}{file_name}.strm 文件已存在，跳过')
             return False
 
         try:
             with open(file_path, 'w', encoding='utf-8') as file:
                 file.write(download_url)
-            logger.debug(f'创建 {file_name}.strm 文件成功: {download_url}')
+            logger.info(f'🏷 {log_prefix}创建 {file_name}.strm -> {download_url}')
             return True
         except Exception as e:
-            logger.error(f'创建strm源文件失败: {e}')
+            logger.error(f'创建 {file_name}.strm 失败: {e}')
             return False
+
+    def _extract_season_from_url(self, url: str) -> str:
+        """从URL中提取季度路径，如 2026-4"""
+        match = re.search(r'/(\d{4}-[1-9])/', url)
+        return match.group(1) if match else ""
 
     def __task(self, fulladd: bool = False):
         """核心任务执行"""
@@ -338,7 +345,8 @@ class OpenANi(_PluginBase):
             rss_info_list = self.get_latest_list()
             logger.info(f'本次处理 {len(rss_info_list)} 个RSS文件')
             for rss_info in rss_info_list:
-                if self.__touch_strm_file(file_name=rss_info['title'], download_url=rss_info['link']):
+                season_folder = self._extract_season_from_url(rss_info['link'])
+                if self.__touch_strm_file(file_name=rss_info['title'], download_url=rss_info['link'], parent_folder=season_folder):
                     cnt += 1
         else:
             # 全量添加当季

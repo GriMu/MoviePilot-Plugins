@@ -1,4 +1,4 @@
-""" 追剧日历 - 每日定时发送今日更新通知 """
+""" 追剧日历 - 每日定时发送今日更新通知 + 订阅看板 """
 import datetime
 from typing import Any, List, Dict, Optional, Tuple
 
@@ -12,11 +12,15 @@ from app.log import logger
 from app.plugins import _PluginBase
 from app.schemas import NotificationType
 
+# TMDB 图片基础地址
+TMDB_IMAGE_W500 = "https://image.tmdb.org/t/p/w500"
+TMDB_IMAGE_ORIGINAL = "https://image.tmdb.org/t/p/original"
+
 
 class EpisodeCalendar(_PluginBase):
     # 插件基础信息
     plugin_name = "追剧日历"
-    plugin_desc = "每日定时发送今日追剧日历通知，附带海报图片，一目了然今天哪些剧更新。"
+    plugin_desc = "订阅看板 + 每日追剧日历通知。看板展示订阅总览、进度和缺少集数；定时推送今日更新提醒。"
     
     # === 补全元数据（解决无作者信息问题） ===
     plugin_author = "GriMu"
@@ -230,13 +234,19 @@ class EpisodeCalendar(_PluginBase):
         return [
             {
                 'component': 'VForm',
+                'props': {
+                    'ref': 'form'
+                },
                 'content': [
                     {
                         'component': 'VRow',
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -249,7 +259,10 @@ class EpisodeCalendar(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -262,7 +275,10 @@ class EpisodeCalendar(_PluginBase):
                             },
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12, 'md': 4},
+                                'props': {
+                                    'cols': 12,
+                                    'md': 4
+                                },
                                 'content': [
                                     {
                                         'component': 'VSwitch',
@@ -272,7 +288,7 @@ class EpisodeCalendar(_PluginBase):
                                         }
                                     }
                                 ]
-                            },
+                            }
                         ]
                     },
                     {
@@ -280,7 +296,9 @@ class EpisodeCalendar(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12
+                                },
                                 'content': [
                                     {
                                         'component': 'VTextField',
@@ -292,7 +310,7 @@ class EpisodeCalendar(_PluginBase):
                                         }
                                     }
                                 ]
-                            },
+                            }
                         ]
                     },
                     {
@@ -300,7 +318,9 @@ class EpisodeCalendar(_PluginBase):
                         'content': [
                             {
                                 'component': 'VCol',
-                                'props': {'cols': 12},
+                                'props': {
+                                    'cols': 12
+                                },
                                 'content': [
                                     {
                                         'component': 'VAlert',
@@ -324,84 +344,298 @@ class EpisodeCalendar(_PluginBase):
         }
 
     def get_page(self) -> Optional[list]:
-        """ 返回插件详情页面 """
-        return [
-            {
-                'component': 'VContainer',
+        """ 返回插件详情页面 - 订阅看板 """
+        # 获取所有订阅
+        all_subs = SubscribeOper().list() or []
+        active_subs = [s for s in all_subs if getattr(s, 'state', '') == 'R']
+        movie_subs = [s for s in all_subs if getattr(s, 'type', '') == '电影']
+        tv_subs = [s for s in all_subs if getattr(s, 'type', '') == '电视剧']
+
+        # 统计卡片
+        stat_cards = [
+            {'title': '总订阅', 'value': str(len(all_subs)), 'color': 'primary', 'icon': 'mdi-folder-star-outline'},
+            {'title': '电视剧', 'value': str(len(tv_subs)), 'color': 'teal', 'icon': 'mdi-television-classic'},
+            {'title': '电影', 'value': str(len(movie_subs)), 'color': 'amber', 'icon': 'mdi-movie-open-outline'},
+            {'title': '已启用', 'value': str(len(active_subs)), 'color': 'success', 'icon': 'mdi-check-circle-outline'},
+        ]
+
+        stat_row = {
+            'component': 'VRow',
+            'props': {'dense': True},
+            'content': [
+                {
+                    'component': 'VCol',
+                    'props': {'cols': 6, 'md': 3},
+                    'content': [
+                        {
+                            'component': 'VCard',
+                            'props': {
+                                'variant': 'tonal',
+                                'color': card['color'],
+                            },
+                            'content': [
+                                {
+                                    'component': 'VCardText',
+                                    'props': {'class': 'pa-3'},
+                                    'content': [
+                                        {
+                                            'component': 'div',
+                                            'props': {'class': 'd-flex align-center'},
+                                            'content': [
+                                                {
+                                                    'component': 'VIcon',
+                                                    'props': {
+                                                        'icon': card['icon'],
+                                                        'size': '36',
+                                                        'class': 'mr-3',
+                                                    }
+                                                },
+                                                {
+                                                    'component': 'div',
+                                                    'content': [
+                                                        {
+                                                            'component': 'div',
+                                                            'props': {'class': 'text-h5 font-weight-bold'},
+                                                            'text': card['value'],
+                                                        },
+                                                        {
+                                                            'component': 'div',
+                                                            'props': {'class': 'text-caption text-medium-emphasis'},
+                                                            'text': card['title'],
+                                                        },
+                                                    ]
+                                                },
+                                            ]
+                                        },
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+                for card in stat_cards
+            ]
+        }
+
+        # 运行状态
+        status_card = {
+            'component': 'VCard',
+            'props': {'variant': 'flat', 'class': 'mt-3'},
+            'content': [
+                {
+                    'component': 'VCardText',
+                    'props': {'class': 'pa-3'},
+                    'content': [
+                        {
+                            'component': 'div',
+                            'props': {'class': 'd-flex align-center text-caption text-medium-emphasis'},
+                            'content': [
+                                {
+                                    'component': 'VIcon',
+                                    'props': {'icon': 'mdi-clock-outline', 'size': '16', 'class': 'mr-1'}
+                                },
+                                {
+                                    'component': 'span',
+                                    'text': f'上次运行：{self._last_run_time or "从未运行"}'
+                                },
+                                {
+                                    'component': 'VDivider',
+                                    'props': {'vertical': True, 'class': 'mx-2'}
+                                },
+                                {
+                                    'component': 'span',
+                                    'text': f'{self._last_run_msg}'
+                                },
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+        # 订阅列表
+        sub_items_content = []
+        for sub in sorted(all_subs, key=lambda x: (getattr(x, 'type', '') != '电视剧', getattr(x, 'name', ''))):
+            sub_type = getattr(sub, 'type', '未知')
+            is_tv = sub_type == '电视剧'
+            season = getattr(sub, 'season', 1) or 1
+            total_ep = getattr(sub, 'total_episode', 0) or 0
+            lack_ep = getattr(sub, 'lack_episode', 0) or 0
+            watched = total_ep - lack_ep if total_ep > 0 else 0
+            progress_pct = int(watched / total_ep * 100) if total_ep > 0 else 0
+            state = getattr(sub, 'state', 'N')
+            is_active = state == 'R'
+            poster = getattr(sub, 'poster', '') or ''
+            backdrop = getattr(sub, 'backdrop', '') or ''
+            poster_url = poster if poster.startswith('http') else (f"{TMDB_IMAGE_W500}{poster}" if poster else '')
+            vote = getattr(sub, 'vote', 0) or 0
+
+            # 类型标签
+            type_chip = {
+                'component': 'VChip',
                 'props': {
-                    'fluid': True,
-                    'class': 'pa-4'
+                    'size': 'x-small',
+                    'color': 'teal' if is_tv else 'amber',
+                    'variant': 'tonal',
+                    'class': 'mr-1',
                 },
+                'text': f'{"S" if is_tv else ""}{season:02d}' if is_tv else '电影',
+            }
+
+            # 状态标签
+            state_chip = {
+                'component': 'VChip',
+                'props': {
+                    'size': 'x-small',
+                    'color': 'success' if is_active else 'grey',
+                    'variant': 'outlined',
+                },
+                'text': '订阅中' if is_active else '已暂停',
+            }
+
+            # 进度条（仅电视剧）
+            progress_content = []
+            if is_tv and total_ep > 0:
+                progress_content = [
+                    {
+                        'component': 'VProgressLinear',
+                        'props': {
+                            'model-value': progress_pct,
+                            'color': 'primary',
+                            'height': 6,
+                            'rounded': True,
+                            'class': 'mt-2',
+                        }
+                    },
+                    {
+                        'component': 'div',
+                        'props': {'class': 'd-flex justify-space-between text-caption text-medium-emphasis mt-1'},
+                        'content': [
+                            {
+                                'component': 'span',
+                                'text': f'已追 {watched}/{total_ep} 集'
+                            },
+                            {
+                                'component': 'span',
+                                'text': f'缺少 {lack_ep} 集' if lack_ep > 0 else '已完结',
+                            },
+                        ]
+                    },
+                ]
+            elif not is_tv:
+                progress_content = [
+                    {
+                        'component': 'div',
+                        'props': {'class': 'text-caption text-medium-emphasis mt-1'},
+                        'text': f'评分 {vote:.1f}' if vote else '',
+                    }
+                ]
+
+            # 构建卡片
+            card_content = []
+
+            # 海报
+            if poster_url:
+                card_content.append({
+                    'component': 'VImg',
+                    'props': {
+                        'src': poster_url,
+                        'height': 180,
+                        'cover': True,
+                        'class': 'bg-grey-lighten-3',
+                    }
+                })
+
+            # 卡片主体
+            card_content.append({
+                'component': 'VCardTitle',
+                'props': {'class': 'text-subtitle-2 pa-2 pb-0', 'style': 'line-height:1.3;'},
+                'text': getattr(sub, 'name', '未知'),
+            })
+
+            card_content.append({
+                'component': 'VCardSubtitle',
+                'props': {'class': 'pa-2 pt-0'},
+                'content': [
+                    type_chip,
+                    state_chip,
+                    {
+                        'component': 'span',
+                        'props': {'class': 'text-caption text-medium-emphasis ml-1'},
+                        'text': f'({getattr(sub, "year", "")})' if getattr(sub, 'year', '') else '',
+                    },
+                ]
+            })
+
+            if progress_content:
+                card_content.append({
+                    'component': 'VCardText',
+                    'props': {'class': 'pa-2 pt-0'},
+                    'content': progress_content,
+                })
+
+            sub_items_content.append({
+                'component': 'VCol',
+                'props': {'cols': 6, 'sm': 4, 'md': 3, 'lg': 2},
                 'content': [
                     {
                         'component': 'VCard',
-                        'props': {},
+                        'props': {
+                            'variant': 'outlined',
+                            'hover': True,
+                            'class': 'h-100 d-flex flex-column',
+                        },
+                        'content': card_content,
+                    }
+                ]
+            })
+
+        # 空状态
+        if not sub_items_content:
+            sub_items_content.append({
+                'component': 'VCol',
+                'props': {'cols': 12},
+                'content': [
+                    {
+                        'component': 'VAlert',
+                        'props': {
+                            'type': 'info',
+                            'variant': 'tonal',
+                            'text': '暂无订阅，去 MoviePilot 添加订阅后这里会自动展示。',
+                        }
+                    }
+                ]
+            })
+
+        subscribe_grid = {
+            'component': 'VRow',
+            'props': {'dense': True},
+            'content': sub_items_content,
+        }
+
+        return [
+            {
+                'component': 'VContainer',
+                'props': {'fluid': True, 'class': 'pa-4'},
+                'content': [
+                    stat_row,
+                    status_card,
+                    {
+                        'component': 'div',
+                        'props': {'class': 'd-flex align-center mt-4 mb-2'},
                         'content': [
                             {
-                                'component': 'VCardTitle',
-                                'props': {},
-                                'content': [
-                                    {
-                                        'component': 'div',
-                                        'props': {
-                                            'class': 'text-h5'
-                                        },
-                                        'text': '追剧日历'
-                                    }
-                                ]
+                                'component': 'VIcon',
+                                'props': {'icon': 'mdi-view-dashboard-outline', 'size': '20', 'class': 'mr-2'}
                             },
                             {
-                                'component': 'VCardText',
-                                'content': [
-                                    {
-                                        'component': 'VAlert',
-                                        'props': {
-                                            'type': 'info',
-                                            'variant': 'tonal',
-                                            'text': self.plugin_desc
-                                        }
-                                    },
-                                    {
-                                        'component': 'div',
-                                        'props': {
-                                            'class': 'mt-4 text-subtitle-1 font-weight-bold'
-                                        },
-                                        'text': '运行状态'
-                                    },
-                                    {
-                                        'component': 'VList',
-                                        'props': {
-                                            'lines': 'one',
-                                            'density': 'compact'
-                                        },
-                                        'content': [
-                                            {
-                                                'component': 'VListItem',
-                                                'props': {
-                                                    'title': '上次运行时间',
-                                                    'subtitle': self._last_run_time or '从未运行'
-                                                }
-                                            },
-                                            {
-                                                'component': 'VListItem',
-                                                'props': {
-                                                    'title': '上次运行结果',
-                                                    'subtitle': self._last_run_msg or '等待运行'
-                                                }
-                                            },
-                                            {
-                                                'component': 'VListItem',
-                                                'props': {
-                                                    'title': '上次更新剧集数',
-                                                    'subtitle': str(self._last_run_count)
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
+                                'component': 'span',
+                                'props': {'class': 'text-subtitle-1 font-weight-bold'},
+                                'text': f'订阅列表 ({len(all_subs)})',
+                            },
                         ]
-                    }
+                    },
+                    subscribe_grid,
                 ]
             }
         ]

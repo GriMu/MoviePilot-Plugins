@@ -594,10 +594,10 @@
     }
   },
   "EpisodeCalendar": {
-    "name": "EpisodeCalendar",
+    "name": "追剧日历",
     "description": "每日定时发送今日追剧日历通知，附带海报图片，一目了然今天哪些剧更新。",
-    "labels": "刮削",
-    "version": "2.5.3",
+    "labels": "消息通知",
+    "version": "v1.0.0",
     "icon": "mdi-calendar-clock",
     "author": "GriMu",
     "level": 1,

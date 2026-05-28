@@ -592,5 +592,17 @@
 	  "v2.5.0": "自动获取当季所有番剧，支持自定义请求头绕过Cloudflare防护。",
 	  "v2.5.3": " 获取直链。"
     }
+  },
+  "EpisodeCalendar": {
+    "name": "EpisodeCalendar",
+    "description": "每日定时发送今日追剧日历通知，附带海报图片，一目了然今天哪些剧更新。",
+    "labels": "刮削",
+    "version": "2.5.3",
+    "icon": "mdi-calendar-clock",
+    "author": "GriMu",
+    "level": 1,
+    "history": {
+     "v1.0.0": "每日定时发送今日追剧日历通知，附带海报图片，一目了然今天哪些剧更新。"
+    }
   }
 }

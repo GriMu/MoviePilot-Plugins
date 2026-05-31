@@ -229,6 +229,9 @@ class EpisodeCalendar(_PluginBase):
     def get_state(self) -> bool:
         return self._enabled
 
+    def get_api(self) -> List[Dict[str, Any]]:
+        return []
+
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         """ 返回前端表单配置 """
         return [

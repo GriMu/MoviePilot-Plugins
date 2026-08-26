@@ -457,21 +457,22 @@ class EpisodeCalendar(_PluginBase):
                 ]
             }
 
-            # 订阅列表
-            sub_items_content = []
-            for sub in sorted(all_subs, key=lambda x: (getattr(x, 'type', '') != '电视剧', getattr(x, 'name', ''))):
-                sub_type = getattr(sub, 'type', '未知')
-                is_tv = sub_type == '电视剧'
-                season = getattr(sub, 'season', 1) or 1
-                total_ep = getattr(sub, 'total_episode', 0) or 0
-                lack_ep = getattr(sub, 'lack_episode', 0) or 0
-                watched = total_ep - lack_ep if total_ep > 0 else 0
-                progress_pct = int(watched / total_ep * 100) if total_ep > 0 else 0
-                state = getattr(sub, 'state', 'N')
-                is_active = state == 'R'
-                poster = getattr(sub, 'poster', '') or ''
-                poster_url = poster if poster.startswith('http') else (f"{TMDB_IMAGE_W500}{poster}" if poster else '')
-                vote = getattr(sub, 'vote', 0) or 0
+            # 订阅列表 - 修改排序 key
+			sub_items_content = []
+			for sub in sorted(all_subs, key=lambda x: (getattr(x, 'type', '') != '电视剧', str(getattr(x, 'name', '') or ''))):
+				sub_type = getattr(sub, 'type', '未知')
+				is_tv = sub_type == '电视剧'
+				season = getattr(sub, 'season', 1) or 1
+				total_ep = getattr(sub, 'total_episode', 0) or 0
+				lack_ep = getattr(sub, 'lack_episode', 0) or 0
+				watched = total_ep - lack_ep if total_ep > 0 else 0
+				progress_pct = int(watched / total_ep * 100) if total_ep > 0 else 0
+				state = getattr(sub, 'state', 'N')
+				is_active = state == 'R'
+				poster = getattr(sub, 'poster', '') or ''
+				# 修改海报URL构建，避免 None.startswith
+				poster_url = poster if (poster and poster.startswith('http')) else (f"{TMDB_IMAGE_W500}{poster}" if poster else '')
+				vote = getattr(sub, 'vote', 0) or 0
 
                 # 类型标签
                 type_chip = {

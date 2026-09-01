@@ -1,22 +1,23 @@
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Event
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app import schemas
-from app.chain.media import MediaChain
-from app.core.config import settings
-from app.core.metainfo import MetaInfoPath
-from app.db.transferhistory_oper import TransferHistoryOper
-from app.helper.nfo import NfoReader
-from app.log import logger
+from app.chain.scraping import ScrapingChain
+from app.sdk.config import settings
+from app.sdk.media import MetaInfoPath
+from app.db.oper.transferhistory import TransferHistoryOper
+from app.sdk.media import NfoReader
+from app.sdk.logging import logger
 from app.plugins import _PluginBase
-from app.schemas import MediaType
-from app.utils.system import SystemUtils
+from app.schemas import MediaSource, MediaType
+from app.sdk.media import resolve_media_identity
+from app.sdk.utilities import SystemUtils
 
 
 class MpScraper(_PluginBase):
@@ -27,7 +28,7 @@ class MpScraper(_PluginBase):
     # 插件图标
     plugin_icon = "scraper.png"
     # 插件版本
-    plugin_version = "2.1.1"  # 版本号更新
+    plugin_version = "3.1.0"
     # 插件作者
     plugin_author = "GriMu"
     # 作者主页
@@ -49,13 +50,16 @@ class MpScraper(_PluginBase):
     _mode = ""
     _scraper_paths = ""
     _exclude_paths = ""
-    # 【新增】配置项：只刮削N天内新增的资源
+    # 【新增】仅刮削N天内新增
     _scraper_days = 0
-
     # 退出事件
     _event = Event()
+    # 刮削目标类型
+    _target_dir = "dir"
+    _target_file = "file"
 
     def init_plugin(self, config: dict = None):
+
         # 读取配置
         if config:
             self._enabled = config.get("enabled")
@@ -64,7 +68,7 @@ class MpScraper(_PluginBase):
             self._mode = config.get("mode") or ""
             self._scraper_paths = config.get("scraper_paths") or ""
             self._exclude_paths = config.get("exclude_paths") or ""
-            # 【新增】读取新配置项
+            # 【新增】读取天数配置
             self._scraper_days = int(config.get("scraper_days") or 0)
 
         # 停止现有任务
@@ -76,20 +80,19 @@ class MpScraper(_PluginBase):
             if self._onlyonce:
                 logger.info(f"MP媒体库刮削服务，立即运行一次")
                 self._scheduler = BackgroundScheduler(timezone=settings.TZ)
-                self._scheduler.add_job(func=self.__libraryscraper, trigger='date',
+                self._scheduler.add_job(func=self.__mpscraper, trigger='date',
                                         run_date=datetime.now(tz=pytz.timezone(settings.TZ)) + timedelta(seconds=3),
                                         name="MP媒体库刮削")
                 # 关闭一次性开关
                 self._onlyonce = False
-                # 【修改】更新配置时包含新项
                 self.update_config({
-                    "enabled": self._enabled,
                     "onlyonce": False,
+                    "enabled": self._enabled,
                     "cron": self._cron,
                     "mode": self._mode,
                     "scraper_paths": self._scraper_paths,
                     "exclude_paths": self._exclude_paths,
-                    "scraper_days": self._scraper_days
+                    "scraper_days": self._scraper_days  # 【新增】保存天数配置
                 })
                 if self._scheduler.get_jobs():
                     # 启动服务
@@ -122,7 +125,7 @@ class MpScraper(_PluginBase):
                 "id": "MpScraper",
                 "name": "MP媒体库刮削",
                 "trigger": CronTrigger.from_crontab(self._cron),
-                "func": self.__libraryscraper,
+                "func": self.__mpscraper,
                 "kwargs": {}
             }]
         elif self._enabled:
@@ -130,7 +133,7 @@ class MpScraper(_PluginBase):
                 "id": "MpScraper",
                 "name": "MP媒体库刮削",
                 "trigger": CronTrigger.from_crontab("0 0 */7 * *"),
-                "func": self.__libraryscraper,
+                "func": self.__mpscraper,
                 "kwargs": {}
             }]
         return []
@@ -176,6 +179,7 @@ class MpScraper(_PluginBase):
                                     }
                                 ]
                             },
+                            # 【新增】天数输入
                             {
                                 'component': 'VCol',
                                 'props': {
@@ -312,14 +316,13 @@ class MpScraper(_PluginBase):
             "mode": "",
             "scraper_paths": "",
             "exclude_paths": "",
-            # 【修改】增加新配置项的默认值
-            "scraper_days": 0
+            "scraper_days": 0  # 【新增】默认值
         }
 
     def get_page(self) -> List[dict]:
         pass
 
-    def __libraryscraper(self):
+    def __mpscraper(self):
         """
         开始刮削媒体库
         """
@@ -327,8 +330,6 @@ class MpScraper(_PluginBase):
             return
 
         # 【新增】计算时间阈值
-        # 如果 scraper_days > 0，则计算N天前的时间戳
-        # 否则，time_threshold 为 None，表示不限制时间
         time_threshold = None
         if self._scraper_days > 0:
             time_threshold = datetime.now() - timedelta(days=self._scraper_days)
@@ -338,7 +339,7 @@ class MpScraper(_PluginBase):
         exclude_paths = self._exclude_paths.split("\n")
         # 已选择的目录
         paths = self._scraper_paths.split("\n")
-        # 需要适削的媒体文件夹
+        # 需要刮削的媒体目录或文件
         scraper_paths = []
         for path in paths:
             if not path:
@@ -354,24 +355,22 @@ class MpScraper(_PluginBase):
             # 判断路径是否存在
             scraper_path = Path(path)
             if not scraper_path.exists():
-                logger.warning(f"MP媒体库刮削路径不存在：{path}")
+                logger.warning(f"媒体库刮削路径不存在：{path}")
                 continue
             logger.info(f"开始检索目录：{path} {mtype} ...")
             # 遍历所有文件
             files = SystemUtils.list_files(scraper_path, settings.RMT_MEDIAEXT)
             for file_path in files:
                 if self._event.is_set():
-                    logger.info(f"MP媒体库刮削服务停止")
+                    logger.info(f"媒体库刮削服务停止")
                     return
 
                 # 【新增】根据时间阈值筛选文件
                 if time_threshold:
                     try:
-                        # 获取文件最后修改时间
                         file_mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
-                        # 如果文件修改时间早于阈值，则跳过
                         if file_mtime < time_threshold:
-                            logger.debug(f"{file_path} 修改时间 {file_mtime.strftime('%Y-%m-%d')}，早于阈值，跳过...")
+                            logger.debug(f"{file_path} 修改时间 {file_mtime.strftime('%Y-%m-%d %H:%M:%S')} 早于阈值，跳过...")
                             continue
                     except Exception as e:
                         logger.error(f"获取文件 {file_path} 修改时间失败: {e}")
@@ -389,79 +388,188 @@ class MpScraper(_PluginBase):
                 if exclude_flag:
                     logger.debug(f"{file_path} 在排除目录中，跳过 ...")
                     continue
-                # 识别是电影还是电视剧
-                if not mtype:
-                    file_meta = MetaInfoPath(file_path)
-                    mtype = file_meta.type
-                # 重命名格式
-                rename_format = settings.TV_RENAME_FORMAT \
-                    if mtype == MediaType.TV else settings.MOVIE_RENAME_FORMAT
-                # 计算重命名中的文件夹层数
-                rename_format_level = len(rename_format.split("/")) - 1
-                if rename_format_level < 1:
+                if mtype and not self.__match_forced_type_path(
+                        file_path=file_path,
+                        scraper_path=scraper_path,
+                        mtype=mtype
+                ):
+                    logger.debug(f"{file_path} 不属于强制指定的{mtype.value}目录，跳过 ...")
                     continue
-                # 取相对路径的第1层目录
-                media_path = file_path.parents[rename_format_level - 1]
-                dir_item = (media_path, mtype)
-                if dir_item not in scraper_paths:
-                    logger.info(f"发现目录：{dir_item}")
-                    scraper_paths.append(dir_item)
+                # 识别是电影还是电视剧，强制类型只作为默认值，不污染后续文件识别结果
+                file_meta = MetaInfoPath(file_path)
+                file_mtype = mtype
+                if not file_mtype:
+                    file_mtype = file_meta.type
+                    if file_mtype == MediaType.UNKNOWN:
+                        file_mtype = self.__infer_type_from_path(file_path=file_path, scraper_path=scraper_path)
+                scraper_item = self.__get_scrape_item(
+                    file_path=file_path,
+                    scraper_path=scraper_path,
+                    mtype=file_mtype,
+                    media_source=file_meta.media_source,
+                    media_id=file_meta.media_id,
+                )
+                if scraper_item and not self.__contains_scrape_item(scraper_paths, scraper_item):
+                    logger.info(f"发现刮削目标：{scraper_item}")
+                    scraper_paths.append(scraper_item)
         # 开始刮削
         if scraper_paths:
             for item in scraper_paths:
-                logger.info(f"开始刮削目录：{item[0]} ...")
-                self.__scrape_dir(path=item[0], mtype=item[1])
+                logger.info(f"开始刮削目标：{item[0]} ...")
+                self.__scrape_path(
+                    path=item[0],
+                    mtype=item[1],
+                    target_type=item[2],
+                    media_source=item[3],
+                    media_id=item[4],
+                )
         else:
             logger.info(f"未发现需要刮削的目录")
 
-    def __scrape_dir(self, path: Path, mtype: MediaType):
+    @staticmethod
+    def __get_scrape_item(
+            file_path: Path,
+            scraper_path: Path,
+            mtype: MediaType,
+            media_source: Optional[MediaSource] = None,
+            media_id: Optional[str] = None,
+    ) -> Optional[Tuple[Path, MediaType, str, Optional[MediaSource], Optional[str]]]:
         """
-        削刮一个目录，该目录必须是媒体文件目录
+        根据扫描根目录和重命名格式，计算真正需要刮削的媒体目录。
+        分类目录通常位于扫描根目录下方，必须用相对路径计算，否则会被误当成媒体目录。
         """
-        # 优先读取本地nfo文件
-        tmdbid = None
-        if mtype == MediaType.MOVIE:
-            # 电影
-            movie_nfo = path / "movie.nfo"
-            if movie_nfo.exists():
-                tmdbid = self.__get_tmdbid_from_nfo(movie_nfo)
-            file_nfo = path / (path.stem + ".nfo")
-            if not tmdbid and file_nfo.exists():
-                tmdbid = self.__get_tmdbid_from_nfo(file_nfo)
+        if not file_path or not scraper_path or not mtype:
+            return None
+
+        rename_format = settings.TV_RENAME_FORMAT if mtype == MediaType.TV else settings.MOVIE_RENAME_FORMAT
+        rename_format_level = len(rename_format.strip("/").split("/")) - 1
+        try:
+            relative_path = file_path.relative_to(scraper_path)
+        except ValueError:
+            relative_path = Path(file_path.name)
+
+        if rename_format_level >= 1:
+            relative_parts = Path(relative_path).parts
+            # 重命名格式中包含几层目录，就从文件往上取几层目录；前缀分类目录不会参与计算。
+            if len(relative_parts) > rename_format_level:
+                media_path = scraper_path.joinpath(*relative_parts[:-rename_format_level])
+                return media_path, mtype, MpScraper._target_dir, media_source, media_id
+
+        # 扁平目录或自定义重命名格式无目录层级时，退回到单文件刮削，避免分类目录识别失败。
+        return file_path, mtype, MpScraper._target_file, media_source, media_id
+
+    @staticmethod
+    def __contains_scrape_item(
+            scraper_paths: List[Tuple[Path, MediaType, str, Optional[MediaSource], Optional[str]]],
+            scraper_item: Tuple[Path, MediaType, str, Optional[MediaSource], Optional[str]],
+    ) -> bool:
+        """
+        判断刮削目标是否已存在；同一目标只刮削一次，媒体身份仅作为识别辅助信息。
+        """
+        return any(item[:3] == scraper_item[:3] for item in scraper_paths)
+
+    @staticmethod
+    def __match_forced_type_path(file_path: Path, scraper_path: Path, mtype: MediaType) -> bool:
+        """
+        强制指定媒体类型时，如果扫描根目录下同时存在“电影/电视剧”分类，则只处理匹配类型的目录。
+        """
+        if mtype not in (MediaType.MOVIE, MediaType.TV):
+            return True
+        try:
+            relative_parts = file_path.relative_to(scraper_path).parts
+        except ValueError:
+            return True
+        media_type_parts = {MediaType.MOVIE.value, MediaType.TV.value}.intersection(relative_parts)
+        return not media_type_parts or mtype.value in media_type_parts
+
+    @staticmethod
+    def __infer_type_from_path(file_path: Path, scraper_path: Path) -> MediaType:
+        """
+        文件名无法识别类型时，从扫描根目录下的“电影/电视剧”分类层推断媒体类型。
+        """
+        try:
+            relative_parts = file_path.relative_to(scraper_path).parts
+        except ValueError:
+            relative_parts = file_path.parts
+        if MediaType.TV.value in relative_parts:
+            return MediaType.TV
+        if MediaType.MOVIE.value in relative_parts:
+            return MediaType.MOVIE
+        return MediaType.UNKNOWN
+
+    def __scrape_path(
+            self,
+            path: Path,
+            mtype: MediaType,
+            target_type: str = _target_dir,
+            media_source: Optional[MediaSource] = None,
+            media_id: Optional[str] = None,
+    ):
+        """
+        刮削一个媒体目录或媒体文件
+        """
+        media_source, media_id = resolve_media_identity(
+            media_source=media_source,
+            media_id=media_id,
+        )
+        # 优先读取本地 NFO 文件；NFO 无合法身份时保留文件路径中的统一身份。
+        nfo_candidates = []
+        if target_type == self._target_file:
+            nfo_candidates.append(path.with_suffix(".nfo"))
+        elif mtype == MediaType.MOVIE:
+            nfo_candidates.extend((path / "movie.nfo", path / (path.stem + ".nfo")))
         else:
-            # 电视剧
-            tv_nfo = path / "tvshow.nfo"
-            if tv_nfo.exists():
-                tmdbid = self.__get_tmdbid_from_nfo(tv_nfo)
-        if tmdbid:
-            # 按TMDBID识别
-            logger.info(f"读取到本地nfo文件的tmdbid：{tmdbid}")
-            mediainfo = self.chain.recognize_media(tmdbid=tmdbid, mtype=mtype)
+            nfo_candidates.append(path / "tvshow.nfo")
+        for nfo_path in nfo_candidates:
+            if not nfo_path.exists():
+                continue
+            nfo_source, nfo_media_id = self.__get_media_identity_from_nfo(nfo_path)
+            if nfo_source:
+                media_source, media_id = nfo_source, nfo_media_id
+                break
+        if media_source and media_id:
+            logger.info(f"读取到本地 NFO 媒体身份：{media_source.value}:{media_id}")
+            mediainfo = self.chain.recognize_media(
+                media_source=media_source,
+                media_id=str(media_id),
+                mtype=mtype,
+            )
         else:
             # 按名称识别
             meta = MetaInfoPath(path)
             meta.type = mtype
             mediainfo = self.chain.recognize_media(meta=meta)
         if not mediainfo:
+            if target_type == self._target_dir:
+                # 目录名无法识别时，通常是分类目录，继续尝试其中的具体媒体文件。
+                self.__scrape_child_files(path=path, mtype=mtype)
+                return
             logger.warn(f"未识别到媒体信息：{path}")
             return
 
-        # 如果未开启新增已入库媒体是否跟随TMDB信息变化则根据tmdbid查询之前的title
+        # 不跟随远端标题时，按统一媒体身份找回整理历史中的标题。
         if not settings.SCRAP_FOLLOW_TMDB:
-            transfer_history = TransferHistoryOper().get_by_type_tmdbid(tmdbid=mediainfo.tmdb_id,
-                                                                        mtype=mediainfo.type.value)
+            transfer_history = TransferHistoryOper().get_by_media_identity(
+                media_source=mediainfo.media_source,
+                media_id=mediainfo.media_id,
+                mtype=mediainfo.type.value,
+            )
             if transfer_history:
                 mediainfo.title = transfer_history.title
         # 获取图片
         self.chain.obtain_images(mediainfo)
         # 刮削
-        MediaChain().scrape_metadata(
+        item_path = str(path).replace("\\", "/")
+        if target_type == self._target_dir:
+            item_path = f"{item_path}/"
+        ScrapingChain().scrape_metadata(
             fileitem=schemas.FileItem(
                 storage="local",
-                type="dir",
-                path=str(path).replace("\\", "/") + "/",
+                type=target_type,
+                path=item_path,
                 name=path.name,
                 basename=path.stem,
+                extension=path.suffix[1:] if target_type == self._target_file else None,
                 modify_time=path.stat().st_mtime,
             ),
             mediainfo=mediainfo,
@@ -469,30 +577,74 @@ class MpScraper(_PluginBase):
         )
         logger.info(f"{path} 刮削完成")
 
-    @staticmethod
-    def __get_tmdbid_from_nfo(file_path: Path):
+    def __scrape_child_files(self, path: Path, mtype: MediaType):
         """
-        从nfo文件中获取信息
-        :param file_path:
-        :return: tmdbid
+        分类目录无法作为单个媒体识别时，继续按目录内的媒体文件逐个刮削。
+        """
+        child_files = SystemUtils.list_files(path, settings.RMT_MEDIAEXT)
+        if not child_files:
+            logger.warn(f"未识别到媒体信息：{path}")
+            return
+        logger.info(f"{path} 可能是分类目录，开始刮削目录内媒体文件 ...")
+        for child_file in child_files:
+            if self._event.is_set():
+                logger.info(f"媒体库刮削服务停止")
+                return
+            child_mtype = mtype
+            child_meta = MetaInfoPath(child_file)
+            if not child_mtype:
+                child_mtype = child_meta.type
+            self.__scrape_path(
+                path=child_file,
+                mtype=child_mtype,
+                target_type=self._target_file,
+                media_source=child_meta.media_source,
+                media_id=child_meta.media_id,
+            )
+
+    @staticmethod
+    def __get_media_identity_from_nfo(file_path: Path) -> Tuple[Optional[MediaSource], Optional[str]]:
+        """
+        从 NFO 中读取第一个可识别的固定来源媒体身份。
+
+        :param file_path: NFO 文件路径
+        :return: 媒体来源枚举与数据源原生 ID
         """
         if not file_path:
-            return None
-        xpaths = [
-            "uniqueid[@type='Tmdb']",
-            "uniqueid[@type='tmdb']",
-            "uniqueid[@type='TMDB']",
-            "tmdbid"
-        ]
+            return None, None
+        source_xpaths = {
+            MediaSource.TMDB: (
+                "uniqueid[@type='Tmdb']",
+                "uniqueid[@type='tmdb']",
+                "uniqueid[@type='TMDB']",
+                "tmdbid",
+            ),
+            MediaSource.IMDb: (
+                "uniqueid[@type='Imdb']",
+                "uniqueid[@type='imdb']",
+                "uniqueid[@type='IMDB']",
+                "imdbid",
+            ),
+            MediaSource.TVDB: (
+                "uniqueid[@type='Tvdb']",
+                "uniqueid[@type='tvdb']",
+                "uniqueid[@type='TVDB']",
+                "tvdbid",
+            ),
+        }
         try:
             reader = NfoReader(file_path)
-            for xpath in xpaths:
-                tmdbid = reader.get_element_value(xpath)
-                if tmdbid:
-                    return tmdbid
+            for source, xpaths in source_xpaths.items():
+                for xpath in xpaths:
+                    media_source, media_id = resolve_media_identity(
+                        media_source=source,
+                        media_id=reader.get_element_value(xpath),
+                    )
+                    if media_source:
+                        return media_source, media_id
         except Exception as err:
-            logger.warn(f"从nfo文件中获取tmdbid失败：{str(err)}")
-        return None
+            logger.warn(f"从 NFO 文件中获取媒体身份失败：{str(err)}")
+        return None, None
 
     def stop_service(self):
         """

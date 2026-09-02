@@ -117,19 +117,19 @@ class EpisodeCalendar(_PluginBase):
         # 按 TMDB ID 和季号分组（同一部剧多季只请求一次 TMDB）
         sub_map: Dict[tuple, list] = {}
         for sub in subscribes:
-            if not sub.tmdbid:
+            if not sub.media_id:
                 continue
-            key = (sub.tmdbid, sub.season or 1, sub.episode_group)
+            key = (sub.media_id, sub.season or 1, sub.episode_group)
             sub_map.setdefault(key, []).append(sub)
 
         # 逐个获取剧集排期
         today_episodes: List[Dict[str, Any]] = []
         tmdb_chain = TmdbChain()
         
-        for (tmdbid, season, ep_group), subs in sub_map.items():
+        for (media_id, season, ep_group), subs in sub_map.items():
             try:
                 episodes = tmdb_chain.tmdb_episodes(
-                    tmdbid=tmdbid,
+                    media_id=tmdbid,
                     season=season,
                     episode_group=ep_group,
                 )
@@ -166,7 +166,7 @@ class EpisodeCalendar(_PluginBase):
                 "total_episode": total_eps_with_date,
                 "lack_episode": lack,
                 "today_eps": today_eps,
-                "tmdbid": sub.tmdbid,
+                "media_id": sub.media_id,
             })
 
         if not today_episodes:

@@ -129,7 +129,7 @@ class EpisodeCalendar(_PluginBase):
         for (media_id, season, ep_group), subs in sub_map.items():
             try:
                 episodes = tmdb_chain.tmdb_episodes(
-                    media_id=tmdbid,
+                    tmdbid=media_id,
                     season=season,
                     episode_group=ep_group,
                 )
